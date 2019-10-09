@@ -1,8 +1,10 @@
 <?php
 
+\Firebase\JWT\JWT::$leeway = 60;
+
 use \Firebase\JWT\JWT;
 
-class ValidateAdmin {
+class ValidateUser {
     private $container;
 
     public function __construct($container) {
@@ -24,10 +26,10 @@ class ValidateAdmin {
         $password = '';
 
         if (strlen($query['token'])) {
-            $decoded_query = JWT::decode($query['token'], getenv('JWT_KEY'), array('HS256'));
+            $decoded_token = JWT::decode($query['token'], getenv('JWT_KEY'), array('HS256'));
 
-            $nip = $decoded_query->nip;
-            $password = $decoded_query->password;
+            $nip = $decoded_token->nip;
+            $password = $decoded_token->password;
         }
 
         if (!strlen($nip) || !strlen($password)) {
@@ -85,4 +87,23 @@ return function($app) {
 
         return $response->withJson($output, 200);
     });
+
+    $app->get('/quiz', function($request, $response, $args) use ($container) {
+        $user = $request->getAttribute('user');
+
+        $db = $container->get('db');
+        $data = $db->table('user_quiz')
+                    ->where('user', $user->id)
+                    ->join('quiz', 'user_quiz.quiz', '=', 'quiz.id')
+                    ->get();
+
+        $output = [
+            'data' => $data,
+            'meta' => [
+                'http' => 200,
+            ],
+        ];
+
+        return $response->withJson($output, 200);
+    })->add(new ValidateUser($container));
 };

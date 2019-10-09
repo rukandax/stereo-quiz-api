@@ -4,7 +4,7 @@ require __DIR__ . '/vendor/autoload.php';
 $dotenv = Dotenv\Dotenv::create(__DIR__);
 $dotenv->load();
 
-error_reporting(TRUE);
+error_reporting(FALSE);
 session_start();
 
 // Instantiate the app
