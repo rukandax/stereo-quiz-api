@@ -58,12 +58,12 @@ return function($app) {
 
         $db = $container->get('db');
         $user = $db->table('user')
-                        ->where('nip', $params['username'])
+                        ->where('nip', $params['nip'])
                         ->where('password', md5($params['password']))
                         ->first();
 
         $error = [
-            'error' => 'Kombinasi username dan password salah',
+            'error' => 'Kombinasi NIP dan password salah',
             'meta' => [
                 'http' => 401,
             ],
