@@ -38,8 +38,8 @@ class ValidateUser {
 
         $db = $this->container->get('db');
         $user = $db->table('user')
-                        ->where('nip', $nip)
-                        ->where('password', $password)
+                        ->where('user.nip', $nip)
+                        ->where('user.password', $password)
                         ->first();
 
         if (!$user) {
@@ -60,8 +60,8 @@ return function($app) {
 
         $db = $container->get('db');
         $user = $db->table('user')
-                        ->where('nip', $params['nip'])
-                        ->where('password', md5($params['password']))
+                        ->where('user.nip', $params['nip'])
+                        ->where('user.password', md5($params['password']))
                         ->first();
 
         $error = [
@@ -88,14 +88,52 @@ return function($app) {
         return $response->withJson($output, 200);
     });
 
+    $app->get('/me', function($request, $response, $args) use ($container) {
+        $user = $request->getAttribute('user');
+
+        $db = $container->get('db');
+        $data = $db->table('user')
+                    ->where('user.id', $user->id)
+                    ->first();
+
+        $output = [
+            'data' => $data,
+            'meta' => [
+                'http' => 200,
+            ],
+        ];
+
+        return $response->withJson($output, 200);
+    })->add(new ValidateUser($container));
+
     $app->get('/quiz', function($request, $response, $args) use ($container) {
         $user = $request->getAttribute('user');
 
         $db = $container->get('db');
         $data = $db->table('user_quiz')
-                    ->where('user', $user->id)
+                    ->where('user_quiz.user', $user->id)
                     ->join('quiz', 'user_quiz.quiz', '=', 'quiz.id')
+                    ->join('proktor', 'user_quiz.proktor', '=', 'proktor.id')
+                    ->select('user_quiz.*', 'quiz.name as quiz_name', 'proktor.name as proktor_name')
                     ->get();
+
+        $output = [
+            'data' => $data,
+            'meta' => [
+                'http' => 200,
+            ],
+        ];
+
+        return $response->withJson($output, 200);
+    })->add(new ValidateUser($container));
+
+    $app->get('/quiz/validate', function($request, $response, $args) use ($container) {
+        $params = $request->getParsedBody();
+
+        $db = $container->get('db');
+        $data = $db->table('proktor')
+                    ->where('proktor.code', $params['code'])
+                    ->first();
 
         $output = [
             'data' => $data,
