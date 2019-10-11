@@ -226,6 +226,28 @@ return function($app) {
                         ->where('user_quiz.proktor', $proktor->id)
                         ->where('user_quiz.user', $user->id)
                         ->first();
+        
+        $question_decoded = json_decode($user_quiz->question);
+        $answer_decoded = json_decode($user_quiz->multiple_answer);
+
+        $question_data = [];
+        $answer_data = [];
+        for ($i = 0; $i < count($question_decoded); $i++) {
+            $quiz_data = $db->table('quiz_data')
+                            ->where('quiz_data.id', $question_decoded[$i])
+                            ->first();
+
+            $answer_text = [];
+            for ($x = 0; $x < count($answer_decoded[$i]); $x++) {
+                array_push($answer_text, json_decode($quiz_data->multiple_answer)[$answer_decoded[$i][$x]]);
+            }
+
+            array_push($question_data, $quiz_data->question);
+            array_push($answer_data, $answer_text);
+        }
+
+        $user_quiz->question_data = $question_data;
+        $user_quiz->answer_data = $answer_data;
 
         $quiz = $db->table('quiz')
                         ->where('quiz.id', $user_quiz->quiz)
