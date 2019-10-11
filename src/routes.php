@@ -227,6 +227,12 @@ return function($app) {
                         ->where('user_quiz.user', $user->id)
                         ->first();
 
+        $quiz = $db->table('quiz')
+                        ->where('quiz.id', $user_quiz->quiz)
+                        ->first();
+
+        $user_quiz->quiz_data = $quiz;
+
         $output = [
             'data' => $user_quiz,
             'meta' => [
@@ -292,6 +298,8 @@ return function($app) {
 
         if (!empty($proktor)) {
             $questions = [];
+            $answers = [];
+            $chosen = [];
 
             $quiz = $db->table('quiz')
                         ->where('quiz.id', $proktor->quiz)
@@ -307,28 +315,21 @@ return function($app) {
                                 ->get();
 
                 for ($x = 0; $x < count($quiz_data); $x++) {
-                    $question = [
-                        'question' => [
-                            'id' => $quiz_data[$x]->id,
-                            'text' => $quiz_data[$x]->question,
-                        ],
-                        'answer' => [],
-                    ];
-
-                    $answers = [];
+                    $answer = [];
                     $answer_decoded = json_decode($quiz_data[$x]->multiple_answer);
 
                     for ($u = 0; $u < count($answer_decoded); $u++) {
-                        array_push($answers, [
-                            'index' => $u,
-                            'text' => $answer_decoded[$u],
-                        ]);
+                        array_push($answer, $u);
                     }
 
-                    shuffle($answers);
-                    $question['answer'] = $answers;
+                    shuffle($answer);
 
-                    array_push($questions, $question);
+                    array_push($questions, $quiz_data[$x]->id);
+                    array_push($answers, $answer);
+                    array_push($chosen, [
+                        'index' => -1,
+                        'flag' => false,
+                    ]);
                 }
             }
 
@@ -338,7 +339,8 @@ return function($app) {
                                 'quiz' => $quiz->id,
                                 'proktor' => $proktor->id,
                                 'question' => json_encode($questions),
-                                'answer' => '[]',
+                                'multiple_answer' => json_encode($answers),
+                                'chosen_answer' => json_encode($chosen),
                                 'created_at' => time(),
                             ]);
 
