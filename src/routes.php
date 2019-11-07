@@ -60,20 +60,40 @@ return function($app) {
 
         $db = $container->get('db');
         $user = $db->table('user')
-                        ->where('user.nip', $params['nip'])
-                        ->where('user.password', md5($params['password']))
-                        ->first();
-
-        $error = [
-            'error' => 'Kombinasi NIP dan password salah',
-            'meta' => [
-                'http' => 401,
-            ],
-        ];
+                    ->where('user.nip', $params['nip'])
+                    ->where('user.password', md5($params['password']))
+                    ->first();
 
         if (!$user) {
+            $error = [
+                'error' => 'Kombinasi NIP dan password salah',
+                'meta' => [
+                    'http' => 401,
+                ],
+            ];
+
             return $response->withJson($error, 401);
         }
+
+        $fingerprint = md5($params['fingerprint']);
+
+        if ($user->state === 'LOGIN' && $user->last_fingerprint != $fingerprint) {
+            $error = [
+                'error' => 'User sedang login, hubungi administrator jika Anda pikir ini kesalahan.',
+                'meta' => [
+                    'http' => 401,
+                ],
+            ];
+
+            return $response->withJson($error, 401);
+        }
+
+        $db->table('user')
+            ->where('user.id', $user->id)
+            ->update([
+                'user.last_fingerprint' => $fingerprint,
+                'user.state' => 'LOGIN',
+            ]);
 
         $payload->nip = $user->nip;
         $payload->password = $user->password;
@@ -87,6 +107,19 @@ return function($app) {
 
         return $response->withJson($output, 200);
     });
+
+    $app->get('/logout', function($request, $response, $args) use ($container) {
+        $user = $request->getAttribute('user');
+
+        $db = $container->get('db');
+        $db->table('user')
+            ->where('user.id', $user->id)
+            ->update([
+                'user.state' => 'LOGOUT',
+            ]);
+
+        return $response->withStatus(200);
+    })->add(new ValidateUser($container));
 
     $app->get('/me', function($request, $response, $args) use ($container) {
         $user = $request->getAttribute('user');
@@ -132,10 +165,10 @@ return function($app) {
 
         $db = $container->get('db');
         $data = $db->table('user_quiz')
+                    ->select('user_quiz.*', 'quiz.name as quiz_name', 'proktor.name as proktor_name', 'proktor.code as proktor_code')
                     ->where('user_quiz.user', $user->id)
-                    ->join('quiz', 'user_quiz.quiz', '=', 'quiz.id')
                     ->join('proktor', 'user_quiz.proktor', '=', 'proktor.id')
-                    ->select('user_quiz.*', 'quiz.name as quiz_name', 'proktor.name as proktor_name')
+                    ->join('quiz', 'proktor.quiz', '=', 'quiz.id')
                     ->get();
 
         for ($i = 0; $i < count($data); $i++) {
@@ -171,6 +204,21 @@ return function($app) {
                         ->first();
 
         if (!empty($proktor)) {
+            $user_quiz = $db->table('user_quiz')
+                            ->where('user_quiz.proktor', $proktor->id)
+                            ->first();
+
+            if (!empty($user_quiz)) {
+                $output = [
+                    'error' => 'Anda sudah pernah mengerjakan quiz dengan kode proktor ' . $proktor->code,
+                    'meta' => [
+                        'http' => 400,
+                    ],
+                ];
+        
+                return $response->withJson($output, 400);
+            }
+
             $data = $db->table('quiz')
                         ->where('quiz.id', $proktor->quiz)
                         ->join('proktor', 'quiz.id', '=', 'proktor.quiz')
@@ -205,10 +253,10 @@ return function($app) {
 
 
         $output = [
-            'error' => [
-                'message' => 'Detail assessment tidak ditemukan',
-                'code' => 404,
-            ]
+            'error' => 'Detail assessment tidak ditemukan',
+            'meta' => [
+                'http' => 404,
+            ],
         ];
 
         return $response->withJson($output, 404);
@@ -237,20 +285,23 @@ return function($app) {
                             ->where('quiz_data.id', $question_decoded[$i])
                             ->first();
 
-            $answer_text = [];
+            $answer = [];
             for ($x = 0; $x < count($answer_decoded[$i]); $x++) {
-                array_push($answer_text, json_decode($quiz_data->multiple_answer)[$answer_decoded[$i][$x]]);
+                array_push($answer, [
+                    'text' => json_decode($quiz_data->multiple_answer)[$answer_decoded[$i][$x]],
+                    'index' => $answer_decoded[$i][$x],
+                ]);
             }
 
             array_push($question_data, $quiz_data->question);
-            array_push($answer_data, $answer_text);
+            array_push($answer_data, $answer);
         }
 
-        $user_quiz->question_data = $question_data;
-        $user_quiz->answer_data = $answer_data;
+        $user_quiz->question_data = json_encode($question_data);
+        $user_quiz->answer_data = json_encode($answer_data);
 
         $quiz = $db->table('quiz')
-                        ->where('quiz.id', $user_quiz->quiz)
+                        ->where('quiz.id', $proktor->quiz)
                         ->first();
 
         $user_quiz->quiz_data = $quiz;
@@ -269,7 +320,9 @@ return function($app) {
         $params = $request->getParsedBody();
         $user = $request->getAttribute('user');
 
-        $message = 'Kode proktor tidak ditemukan';
+        $status = 'valid';
+        $message = '';
+        $code = 200;
 
         $db = $container->get('db');
         $proktor = $db->table('proktor')
@@ -279,10 +332,6 @@ return function($app) {
         if (!empty($proktor)) {
             $user_quiz = $db->table('user_quiz')
                             ->where('user_quiz.proktor', $proktor->id)
-                            ->where(function ($query) {
-                                $query->where('user_quiz.state', 'PENDING')
-                                      ->orWhere('user_quiz.state', 'PROGRESS');
-                            })
                             ->first();
 
             if (empty($user_quiz)) {
@@ -294,19 +343,21 @@ return function($app) {
             } else {
                 $message = 'Anda sudah pernah mengerjakan quiz dengan kode proktor ' . $params['code'];
             }
+        } else {
+            $message = 'Kode proktor tidak ditemukan';
         }
 
         $output = [
             'data' => [
-                'status' => !empty($quiz) ? 'valid' : 'invalid',
+                'status' => $status,
                 'message' => $message,
             ],
             'meta' => [
-                'http' => 200,
+                'http' => $code,
             ],
         ];
 
-        return $response->withJson($output, 200);
+        return $response->withJson($output, $code);
     })->add(new ValidateUser($container));
 
     $app->post('/quiz/start', function($request, $response, $args) use ($container) {
@@ -358,7 +409,6 @@ return function($app) {
             $user_quiz_id = $db->table('user_quiz')
                             ->insertGetId([
                                 'user' => $user->id,
-                                'quiz' => $quiz->id,
                                 'proktor' => $proktor->id,
                                 'question' => json_encode($questions),
                                 'multiple_answer' => json_encode($answers),
@@ -381,10 +431,105 @@ return function($app) {
         }
 
         $output = [
-            'error' => [
-                'message' => 'Kode proktor tidak ditemukan',
-                'code' => 404,
-            ]
+            'error' => 'Kode proktor tidak ditemukan',
+            'meta' => [
+                'http' => 404,
+            ],
+        ];
+
+        return $response->withJson($output, 404);
+    })->add(new ValidateUser($container));
+
+    $app->post('/quiz/answer', function($request, $response, $args) use ($container) {
+        $params = $request->getParsedBody();
+        $user = $request->getAttribute('user');
+
+        $db = $container->get('db');
+        $proktor = $db->table('proktor')
+                        ->where('proktor.code', strtoupper($params['code']))
+                        ->first();
+
+        if (!empty($proktor)) {
+            $user_quiz = $db->table('user_quiz')
+                            ->where('user_quiz.proktor', $proktor->id)
+                            ->where('user_quiz.user', $user->id)
+                            ->first();
+
+            $chosen_answer = json_decode($user_quiz->chosen_answer);
+            for($i = 0; $i < count($chosen_answer); $i += 1) {
+                $chosen_answer[$params['number'] - 1]->index = $params['answer'];
+                $chosen_answer[$params['number'] - 1]->flag = $params['flag'];
+            }
+
+            $db->table('user_quiz')
+                ->where('user_quiz.proktor', $proktor->id)
+                ->where('user_quiz.user', $user->id)
+                ->update([
+                    'chosen_answer' => json_encode($chosen_answer),
+                ]);
+
+            $user_quiz = $db->table('user_quiz')
+                            ->where('user_quiz.proktor', $proktor->id)
+                            ->where('user_quiz.user', $user->id)
+                            ->first();
+
+            $output = [
+                'data' => $user_quiz,
+                'meta' => [
+                    'http' => 200,
+                ],
+            ];
+
+            return $response->withJson($output, 200);
+        }
+
+        $output = [
+            'error' => 'Kode proktor tidak ditemukan',
+            'meta' => [
+                'http' => 404,
+            ],
+        ];
+
+        return $response->withJson($output, 404);
+    })->add(new ValidateUser($container));
+
+    $app->post('/quiz/finish', function($request, $response, $args) use ($container) {
+        $params = $request->getParsedBody();
+        $user = $request->getAttribute('user');
+
+        $db = $container->get('db');
+        $proktor = $db->table('proktor')
+                        ->where('proktor.code', strtoupper($params['code']))
+                        ->first();
+
+        if (!empty($proktor)) {
+            $db->table('user_quiz')
+                ->where('user_quiz.proktor', $proktor->id)
+                ->where('user_quiz.user', $user->id)
+                ->update([
+                    'user_quiz.state' => 'EVALUATING',
+                ]);
+
+            $user_quiz = $db->table('user_quiz')
+                            ->where('user_quiz.proktor', $proktor->id)
+                            ->where('user_quiz.user', $user->id)
+                            ->first();
+
+            $output = [
+                'data' => $user_quiz,
+                'meta' => [
+                    'http' => 200,
+                ],
+            ];
+
+            return $response->withJson($output, 200);
+        }
+
+        $output = [
+            'error' => 'Kode proktor tidak ditemukan',
+            'meta' => [
+                'http' => 404,
+            ],
         ];
 
         return $response->withJson($output, 404);
